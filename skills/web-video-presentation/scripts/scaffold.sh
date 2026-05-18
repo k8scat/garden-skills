@@ -149,10 +149,10 @@ cp "$TEMPLATES/src/chapters/01-example/Example.tsx"     src/chapters/01-example/
 cp "$TEMPLATES/src/chapters/01-example/Example.css"     src/chapters/01-example/Example.css
 cp "$TEMPLATES/src/chapters/01-example/narrations.ts"   src/chapters/01-example/narrations.ts
 
-# Audio pipeline scripts (extract-narrations + synthesize-audio).
-cp "$TEMPLATES/scripts/extract-narrations.ts"  scripts/extract-narrations.ts
-cp "$TEMPLATES/scripts/synthesize-audio.sh"    scripts/synthesize-audio.sh
-chmod +x scripts/synthesize-audio.sh
+# Audio pipeline scripts (extract-narrations + Bailian TTS synthesis).
+cp "$TEMPLATES/scripts/extract-narrations.ts"          scripts/extract-narrations.ts
+cp "$TEMPLATES/scripts/synthesize-audio-bailian.mjs"   scripts/synthesize-audio-bailian.mjs
+chmod +x scripts/synthesize-audio-bailian.mjs
 
 # Wire the audio scripts into npm so contributors don't have to remember
 # the exact command. Uses node to merge into the existing package.json.
@@ -161,7 +161,7 @@ const fs = require("fs");
 const p = JSON.parse(fs.readFileSync("package.json", "utf8"));
 p.scripts = Object.assign({}, p.scripts, {
   "extract-narrations": "tsx scripts/extract-narrations.ts",
-  "synthesize-audio":   "bash scripts/synthesize-audio.sh",
+  "synthesize-audio":   "node scripts/synthesize-audio-bailian.mjs",
 });
 fs.writeFileSync("package.json", JSON.stringify(p, null, 2) + "\n");
 '
@@ -212,8 +212,8 @@ cat <<EOF
 音频合成（可选，录制前做）：
 
   npm run extract-narrations    # 扫所有章节 narrations.ts → audio-segments.json
-  npm run synthesize-audio      # 调 mmx-cli 合成 → public/audio/<id>/<step>.mp3
-                                # （没装 mmx 见 references/AUDIO.md）
+  npm run synthesize-audio      # 调阿里云百炼 DashScope TTS → public/audio/<id>/<step>.mp3
+                                # （需要 DASHSCOPE_API_KEY / BAILIAN_API_KEY）
 
 写章节时必读（单一入口，路径在 SKILL 仓库内）：
 

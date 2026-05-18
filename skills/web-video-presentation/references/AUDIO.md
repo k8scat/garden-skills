@@ -9,8 +9,14 @@ Auto 模式会自动按 step 播放并自动推进——录屏可以一镜到底
 > 也不再手写 `totalSteps`。这一改根除了"网页 step 和音频文件数对不上"
 > 这个老问题。
 
-默认用 **MiniMax CLI（`mmx-cli`）**。本机没装就**询问用户**用什么 TTS，
-不要悄悄假装合成成功。
+默认用 **阿里云百炼 / DashScope TTS**，脚本在
+`presentation/scripts/synthesize-audio-bailian.mjs`。当前默认配置：
+
+```js
+engine: "cosyvoice",
+model: "cosyvoice-v3-flash",
+voice: "longyingling_v3",
+```
 
 ---
 
@@ -48,62 +54,86 @@ npm run extract-narrations
 ```json
 [
   { "chapter": "coldopen", "step": 1, "text": "...", "audio": "coldopen/1.mp3" },
-  { "chapter": "coldopen", "step": 2, "text": "...", "audio": "coldopen/2.mp3" },
-  ...
+  { "chapter": "coldopen", "step": 2, "text": "...", "audio": "coldopen/2.mp3" }
 ]
 ```
 
-让用户**先扫一眼这个 json**，确认文本和切分都对，再开始烧 token 合成。
+让用户**先扫一眼这个 json**，确认文本和切分都对，再开始烧 TTS token。
 
 > 空字符串的 narration 会被自动跳过（不烧 TTS token）——运行时 Auto 模式
 > 按字数估时撑过这种"无声过场"step。
 
-### 2. 合成
+### 2. 配置百炼 API key
+
+脚本会自动读取项目根目录下的 `.env.local` / `.env`，也可以直接读当前
+shell 环境变量。下面三个变量名任选其一：
 
 ```bash
-which mmx
+DASHSCOPE_API_KEY=sk-...
+BAILIAN_API_KEY=sk-...
+ALIYUN_BAILIAN_API_KEY=sk-...
 ```
 
-- 找到 → 走 [2.A](#2a-mmx-cli-合成)
-- 没找到 → 走 [2.B](#2b-退化路径)
-
-#### 2.A mmx-cli 合成
-
-##### 鉴权检查
+可选覆盖 endpoint：
 
 ```bash
-mmx auth status
+DASHSCOPE_TTS_URL=https://dashscope.aliyuncs.com/api/v1/services/audio/tts/SpeechSynthesizer
 ```
 
-未登录 → 提示用户：
+未配置 key 时**不要继续**。提示用户把 key 放进 `presentation/.env.local`：
 
-```
-你的 mmx-cli 未登录。请运行：
-  mmx auth login --api-key sk-xxxxx
-（API key 在 https://platform.minimaxi.com 获取）
+```bash
+echo 'DASHSCOPE_API_KEY=sk-...' >> .env.local
 ```
 
-登录前**不要继续**。
+### 3. 先 dry-run 一条
 
-##### 调用合成脚本
+```bash
+npm run synthesize-audio -- --dry-run --limit=1
+```
+
+确认脚本能读到 `audio-segments.json`，并且请求参数符合预期。
+
+### 4. 调用合成脚本
 
 ```bash
 npm run synthesize-audio              # 增量：跳过已存在的 mp3
 npm run synthesize-audio -- --force   # 全部重合成
-npm run synthesize-audio -- --voice=<voice-id>  # 指定音色
+npm run synthesize-audio -- --voice=<voice-id>
+npm run synthesize-audio -- --model=<model-id>
 ```
 
-脚本**串行**调 mmx（避免 rate limit），**自动跳过已存在文件**（断点续合
+脚本**串行**调用百炼（避免 rate limit），**自动跳过已存在文件**（断点续合
 不烧重复 token）。每条打印进度：
 
-```
-[  3/24] coldopen/3.mp3   ✓ 4s
-[  4/24] coldopen/4.mp3   skip (exists)
+```text
+[  3/24] coldopen/3.mp3          ok 1.8s audio=4.12s chars=45
+[  4/24] coldopen/4.mp3          skip (exists)
 ```
 
-##### 校验时长
+常用参数：
 
-合成完后跑：
+| 参数 | 用途 | 默认 |
+|---|---|---|
+| `--engine=cosyvoice` | CosyVoice TTS endpoint | `cosyvoice` |
+| `--engine=qwen` | Qwen-TTS multimodal generation endpoint | —— |
+| `--model=<id>` | 模型 id | `cosyvoice-v3-flash` |
+| `--voice=<id>` | 音色 id | `longyingling_v3` |
+| `--format=<mp3|wav|opus|pcm>` | 输出格式 | `mp3` |
+| `--sample-rate=<hz>` | 采样率 | `24000` |
+| `--rate=<0.5-2.0>` | 语速 | 不传 |
+| `--pitch=<0.5-2.0>` | 音高 | 不传 |
+| `--volume=<0-100>` | 音量 | 不传 |
+| `--language-hint=<code>` | CosyVoice 语言提示；`none` 表示不传 | `zh` |
+| `--language-type=<type>` | Qwen-TTS `language_type` | `Chinese` |
+| `--instruction=<text>` | 口吻 / 风格指令 | 不传 |
+| `--seed=<0-65535>` | 随机种子 | 不传 |
+| `--timeout=<seconds>` | 请求超时 | `300` |
+
+### 5. 校验时长
+
+脚本会在本机存在 `ffprobe` 时自动打印本次合成的单段时长和总时长。也可以
+手动汇总：
 
 ```bash
 for f in public/audio/*/*.mp3; do
@@ -112,34 +142,9 @@ for f in public/audio/*/*.mp3; do
 done
 ```
 
-把每条的实际秒数汇总告诉用户。**重点关注 ≥ 15s 的条目**——口播太长意味
+把每条的实际秒数汇总告诉用户。**重点关注 >= 15s 的条目**——口播太长意味
 着该 step 的 narration 写得过密，或者 step 没拆够。让用户决定**改稿子
 重合**还是**回章节代码拆 step**。
-
-#### 2.B 退化路径（mmx-cli 没装）
-
-不要假装能合成。问用户：
-
-```
-本机没检测到 mmx-cli。我可以：
-
-  1. 帮你安装 MiniMax CLI（推荐）
-     需要：npm 全局安装 + 一个 API key
-     运行：npm install -g mmx-cli && mmx auth login --api-key sk-xxxxx
-     API key 在 https://platform.minimaxi.com 获取
-
-  2. 用其它 TTS（你来提供）
-     告诉我用什么 —— OpenAI TTS / 阿里云 / Azure / ElevenLabs / 其它
-     最好附上调用方式（CLI 命令 / API endpoint + 参数）
-     我会改 scripts/synthesize-audio.sh 让它调你的工具，
-     输出文件路径仍按 audio-segments.json 的 audio 字段写
-
-  3. 暂时跳过
-     稿子和 narrations 都在，你自己用任意 TTS 录制即可
-```
-
-如果用户选 2，按相同的"读 audio-segments.json → 串行调用 → 落盘 →
-校验"流程，把 `mmx speech synthesize` 那一行换成对方的命令即可。
 
 ---
 
@@ -149,12 +154,13 @@ done
 
 | 能力 | 输入 | 输出 |
 |---|---|---|
-| 单段合成 | 一段文字（≤ 5000 字符）+ 音色 id（可选） | 一个 mp3 / wav 文件 |
+| 单段合成 | 一段文字 + 音色 id（可选） | 一个 mp3 / wav 文件 |
 | 错误反馈 | —— | 失败时明确报错（rate limit / auth / 内容审核 / 网络） |
-| 输出可指定路径 | 目标文件路径 | 直接写到该路径 |
+| 输出可落盘 | 目标文件路径或可下载 URL / base64 | 最终写到 `public/audio/<chapter>/<N>.mp3` |
 
-不满足"输出可指定路径"的 API（比如返回二进制流）就在外面包一层 curl /
-node script 把响应写到目标路径。
+百炼脚本已经处理两种响应：`output.audio.data`（base64）和
+`output.audio.url`（下载链接）。如果换成其它 API，也按相同的"读
+`audio-segments.json` → 串行调用 → 落盘 → 校验"流程改脚本即可。
 
 ---
 
@@ -185,20 +191,14 @@ Auto 模式首次需要按一次 `Space` 启动（绕过浏览器自动播放限
 
 | 现象 | 原因 / 修法 |
 |---|---|
-| `chapter id "X" registered but no matching folder found` | 章节文件夹应命名为 `NN-<id>`；id 必须等于 chapters.ts 里注册的 |
-| `narrations.ts in X must export an array named "narrations"` | 该章节的 narrations.ts 没 export 名为 narrations 的数组 |
-| `mmx: command not found` | `npm install -g mmx-cli`；npm 全局 bin 不在 PATH 时 `npm config get prefix` 看一下 |
-| `401 / unauthorized` | `mmx auth login --api-key sk-xxxxx` 重新登录 |
-| 中间断了几条没合成 | `npm run synthesize-audio` 重跑 —— 已存在文件会跳过 |
-| 中文音色不自然 | mmx 默认音色未必最佳；查 `mmx speech --help` 看 `--voice` 可选项，然后传 `--voice=<id>` |
-| 整段合成被截断 | 单段过长（mmx 默认上限约 5000 字符）。在 narrations.ts 里把这条拆成两条（也意味着该 step 应该拆成两个 step） |
+| `Segments file not found` | 先在 `presentation` 目录跑 `npm run extract-narrations` |
+| `Missing API key` | 设置 `DASHSCOPE_API_KEY` / `BAILIAN_API_KEY` / `ALIYUN_BAILIAN_API_KEY` |
+| `401 / unauthorized` | key 无效、过期、权限不够，或 shell 没读到 `.env.local` |
+| `HTTP 429` / rate limit | 等一会儿重跑；已存在 mp3 会自动跳过 |
+| `No output.audio in response` | endpoint / engine / model 不匹配，或返回结构变了；先用 `--dry-run --limit=1` 查请求参数 |
+| `Audio download failed` | 百炼返回的音频 URL 失效或网络失败；重跑该段即可 |
+| 中间断了几条没合成 | `npm run synthesize-audio` 重跑；已存在文件会跳过 |
+| 中文音色不自然 | 换 `--voice=<voice-id>`，或用 `--instruction=<text>` 指定口吻 |
+| 整段合成被截断 | 单段过长。在 narrations.ts 里把这条拆成两条（也意味着该 step 应该拆成两个 step） |
 | 浏览器没播音频 | Auto / Audio 模式下首次需要用户手势——确认你按了 SPACE 启动 Auto，或者点过页面 |
-| 音频 404 但 Auto 模式还能跑 | 找不到 mp3 时 useAudioPlayer 退化到字数估时（4 字/秒），保证预览不中断 |
-
----
-
-## 相关链接
-
-- mmx-cli 仓库：<https://github.com/MiniMax-AI/cli>
-- 官方文档：<https://platform.minimaxi.com/docs/token-plan/minimax-cli>
-- 参数 / 音色查询：`mmx speech --help`
+| 音频 404 但 Auto 模式还能跑 | 找不到 mp3 时 useAudioPlayer 退化到字数估时，保证预览不中断 |
